@@ -1,0 +1,323 @@
+# To investigate: Ellipsis
+# TODO: either implement str based on bytes or vice versa, or extract
+
+from dataclasses import dataclass
+from io import open
+from pathlib import Path
+import hashlib
+import os
+import sys
+import zlib
+import base64
+
+from datetime import datetime
+from typing import SupportsIndex, Callable, Self
+from contextlib import suppress
+
+
+@dataclass
+class ObjectID:
+    entity: SupportsIndex
+
+    def __str__(self) -> str:
+        return hex(self.entity)[2:].zfill(40)
+
+    def __getitem__(self, args):
+        return str(self)[args]
+
+    def __bytes__(self):
+        return bytes(str(self), encoding="latin-1")
+
+
+@dataclass
+class Workspace:
+    path: Path
+    ignore: set[Path]
+
+    def __iter__(self):
+        # TODO: remove conditional; set?
+        return (f for f in self.path.glob("*") if not f in self.ignore)
+
+
+@dataclass
+class Maybe[T]:
+    value: T
+
+
+@dataclass
+class Something[T](Maybe[T]):
+    def __rshift__(self, callable: Callable):
+        return Something(callable(self.value))
+
+    def __invert__(self):
+        return self.value
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}({self.value})"
+
+    def __iter__(self):
+        return iter([self.value])
+
+
+@dataclass
+class Nothing(Maybe[None]):
+    def __init__(self):
+        super().__init__(None)
+
+    def __rshift__(self, _: Callable):
+        return self
+
+    def __invert__(self):
+        raise f"Cannot unwrap {repr(self)}"
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}()"
+
+    def __iter__(self):
+        return iter([])
+
+
+@dataclass
+class Filesystem:
+    base_path: Path
+
+    def __setitem__(self, filepath, content) -> None:
+        full_path = self.base_path / filepath
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        # TODO: Only write when file doesn't already exist
+        # TODO: Write to tmpfile
+        # Allow "content" to determine write mode?
+        with open(full_path, "wb") as file:
+            file.write(bytes(content))
+
+    def __getitem__(self, filepath) -> Maybe[str]:
+        with suppress(FileNotFoundError):
+            with open(self.base_path / filepath) as file:
+                return Something(file.read())
+        return Nothing()
+
+
+@dataclass
+class Database:
+    filesystem: Filesystem
+
+    def __lshift__(self, entry) -> None:
+        content = zlib.compress(bytes(entry), level=zlib.Z_BEST_SPEED)
+        self.filesystem[ObjectPath(ObjectID(entry))] = content
+
+
+@dataclass
+class ObjectPath:
+    oid: ObjectID
+
+    def __str__(self) -> str:
+        return str(Path(self.oid[:2], self.oid[2:]))
+
+    def __fspath__(self) -> str:
+        return str(self)
+
+
+@dataclass
+class Blob:
+    data: str
+
+    def __str__(self) -> str:
+        return f"blob {len(self.data)}\0{self.data}"
+
+    def __len__(self) -> int:
+        return len(bytes(self))
+
+    def __index__(self) -> int:
+        digest = hashlib.new("sha1")
+        digest.update(bytes(self))
+        return int(digest.hexdigest(), 16)
+
+    def __bytes__(self) -> bytes:
+        return bytes(str(self), encoding="latin-1")
+
+
+@dataclass
+class Entry:
+    name: str
+    oid: ObjectID
+    mode: str
+
+    def __lt__(self, other: Self):
+        return self.name < other.name
+
+    def __bytes__(self):
+        packed_id = base64.b16decode(bytes(self.oid), casefold=True)
+        return f"{self.mode} {self.name}\0".encode("latin-1") + packed_id
+
+    def __str__(self):
+        return bytes(self).decode("latin-1")
+
+
+@dataclass
+class Tree:
+    entries: list[Entry]
+
+    def __init__(self) -> None:
+        self.entries = []
+
+    def __lshift__(self, entry: Entry) -> None:
+        self.entries.append(entry)
+
+    def __iter__(self):
+        return iter(sorted(self.entries))
+
+    def __str__(self) -> str:
+        data = "".join(str(e) for e in self)
+        return f"tree {len(data)}\0{data}"
+
+    def __index__(self) -> int:
+        digest = hashlib.new("sha1")
+        digest.update(bytes(self))
+        return int(digest.hexdigest(), 16)
+
+    def __bytes__(self) -> bytes:
+        return bytes(str(self), encoding="latin-1")
+
+
+@dataclass
+class Author:
+    name: str
+    email: str
+    timestamp: datetime
+
+    def __str__(self):
+        return f"{self.name} <{self.email}> {int(self.timestamp.timestamp())} +0000"
+
+
+@dataclass
+class Commit:
+    tree: Tree
+    author: Author
+    message: str
+    parent: Maybe[str]
+
+    def __iter__(self):
+        return iter(
+            (
+                f"tree {ObjectID(self.tree)}",
+                *(f"parent {p}" for p in self.parent),
+                f"author {self.author}",
+                f"committer {self.author}",
+                "",
+                # TODO: Split lines?
+                str(self.message),
+            )
+        )
+
+    def __str__(self):
+        data = "\n".join(self)
+        return f"commit {len(data)}\0{data}"
+
+    def __index__(self) -> int:
+        digest = hashlib.new("sha1")
+        digest.update(bytes(self))
+        return int(digest.hexdigest(), 16)
+
+    def __bytes__(self) -> bytes:
+        return bytes(str(self), encoding="latin-1")
+
+
+@dataclass
+class Head:
+    filesystem: Filesystem
+
+    def __call__(self, commit: Commit):
+        self.filesystem["HEAD"] = ObjectID(commit)
+
+    def __invert__(self):
+        return self.filesystem["HEAD"]
+
+
+@dataclass
+class InitCommand:
+    args: list[str]
+
+    def __call__(self) -> None:
+        # TODO: Remove conditional
+        root_path = Path(self.args[0] if len(self.args) else os.getcwd()).resolve()
+        git_path = root_path / ".git"
+        for directory_name in ["objects", "refs"]:
+            (git_path / directory_name).mkdir(parents=True, exist_ok=True)
+
+        print(f"Initialized empty Pit repository in {git_path}")
+        return 0
+
+
+@dataclass
+class Message:
+    raw: str
+
+    def __str__(self):
+        return self.raw
+
+    def __getitem__(self, index: int):
+        return str(self).split("\n")[index]
+
+
+@dataclass
+class CommitCommand:
+    args: list[str]
+
+    def __call__(self) -> None:
+        root_path = Path(".")
+        git_path = root_path / ".git"
+        db_path = git_path / "objects"
+
+        database = Database(filesystem=Filesystem(db_path))
+        head = Head(Filesystem(git_path))
+        ignore = set([root_path / ".git", root_path / ".ruff_cache"])
+        tree = Tree()
+
+        for path in Workspace(root_path, ignore):
+            with open(str(path)) as file:
+                blob = Blob(file.read())
+                database << blob
+                tree << Entry(path, ObjectID(blob), mode="100644")
+
+        database << tree
+
+        with sys.stdin as input:
+            message = Message(input.read())
+
+        author = Author(
+            os.environ["GIT_AUTHOR_NAME"],
+            os.environ["GIT_AUTHOR_EMAIL"],
+            timestamp=datetime.now(),
+        )
+        parent = ~head
+        commit = Commit(tree, author, message, parent)
+        database << commit
+        head(commit)
+
+        match parent:
+            case Something(_):
+                print(f"[{ObjectID(commit)}] {message[0]}")
+            case Nothing():
+                print(f"[(root-commit) {ObjectID(commit)}] {message[0]}")
+
+        return 0
+
+
+class Pit:
+    def __init__(self, *, args) -> None:
+        self.command, *self.args = args
+
+    def __call__(self):
+        match self.command:
+            case "init":
+                command = InitCommand(self.args)
+            case "commit":
+                command = CommitCommand(self.args)
+            case _:
+                print(f"pit: '{self.command}' is not a pit command.", file=sys.stderr)
+                sys.exit(1)
+
+        sys.exit(command())
+
+
+Pit(args=sys.argv[1:])()
