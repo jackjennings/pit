@@ -1,8 +1,9 @@
+#!/usr/bin/env python3
+
 # To investigate: Ellipsis
 # TODO: either implement str based on bytes or vice versa, or extract
 
 from contextlib import suppress
-from dataclasses import dataclass
 from dataclasses import dataclass
 from datetime import datetime
 from io import open
@@ -103,6 +104,35 @@ class Filesystem:
 
 
 @dataclass
+class FileMode:
+    path: Path
+
+    __match_args__ = tuple(str(i) for i in range(6))
+
+    def __getattr__(self, index: str):
+        return self[int(index)]
+
+    def __getitem__(self, index: int):
+        return tuple(self)[index]
+
+    def __iter__(self):
+        # TODO: avoid string coercion
+        return (int(i) for i in oct(self)[2:])
+
+    def __index__(self):
+        return os.stat(self.path).st_mode
+
+    def __str__(self) -> str:
+        match self:
+            case FileMode(1, _, _, 7, _, _):
+                return "100755"
+            case FileMode(1, _, _, 6, _, _):
+                return "100644"
+            case _:
+                raise f"Unsupported filemode for {self.path}: {oct(self)}"
+
+
+@dataclass
 class Database:
     filesystem: Filesystem
 
@@ -145,7 +175,7 @@ class Blob:
 class Entry:
     name: str
     oid: ObjectID
-    mode: str
+    mode: FileMode
 
     def __lt__(self, other: Self):
         return self.name < other.name
@@ -275,14 +305,16 @@ class CommitCommand:
 
         database = Database(filesystem=Filesystem(db_path))
         head = Head(Filesystem(pit_path))
-        ignore = set([root_path / ".git", root_path / ".pit", root_path / ".ruff_cache"])
+        ignore = set(
+            [root_path / ".git", root_path / ".pit", root_path / ".ruff_cache"]
+        )
         tree = Tree()
 
         for path in Workspace(root_path, ignore):
             with open(str(path)) as file:
                 blob = Blob(file.read())
                 database << blob
-                tree << Entry(path, ObjectID(blob), mode="100644")
+                tree << Entry(path, ObjectID(blob), mode=FileMode(path))
 
         database << tree
 
