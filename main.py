@@ -1,18 +1,19 @@
 # To investigate: Ellipsis
 # TODO: either implement str based on bytes or vice versa, or extract
 
+from contextlib import suppress
 from dataclasses import dataclass
+from dataclasses import dataclass
+from datetime import datetime
 from io import open
 from pathlib import Path
+from typing import Callable
+from typing import SupportsIndex, Self
+import base64
 import hashlib
 import os
 import sys
 import zlib
-import base64
-
-from datetime import datetime
-from typing import SupportsIndex, Callable, Self
-from contextlib import suppress
 
 
 @dataclass
@@ -42,6 +43,10 @@ class Workspace:
 @dataclass
 class Maybe[T]:
     value: T
+
+    @classmethod
+    def __call__(self, value):
+        return bool(value) & Something(value) | Nothing()
 
 
 @dataclass
@@ -240,11 +245,11 @@ class InitCommand:
     def __call__(self) -> None:
         # TODO: Remove conditional
         root_path = Path(self.args[0] if len(self.args) else os.getcwd()).resolve()
-        git_path = root_path / ".git"
+        pit_path = root_path / ".pit"
         for directory_name in ["objects", "refs"]:
-            (git_path / directory_name).mkdir(parents=True, exist_ok=True)
+            (pit_path / directory_name).mkdir(parents=True, exist_ok=True)
 
-        print(f"Initialized empty Pit repository in {git_path}")
+        print(f"Initialized empty Pit repository in {pit_path}")
         return 0
 
 
@@ -265,12 +270,12 @@ class CommitCommand:
 
     def __call__(self) -> None:
         root_path = Path(".")
-        git_path = root_path / ".git"
-        db_path = git_path / "objects"
+        pit_path = root_path / ".pit"
+        db_path = pit_path / "objects"
 
         database = Database(filesystem=Filesystem(db_path))
-        head = Head(Filesystem(git_path))
-        ignore = set([root_path / ".git", root_path / ".ruff_cache"])
+        head = Head(Filesystem(pit_path))
+        ignore = set([root_path / ".git", root_path / ".pit", root_path / ".ruff_cache"])
         tree = Tree()
 
         for path in Workspace(root_path, ignore):
@@ -285,8 +290,8 @@ class CommitCommand:
             message = Message(input.read())
 
         author = Author(
-            os.environ["GIT_AUTHOR_NAME"],
-            os.environ["GIT_AUTHOR_EMAIL"],
+            os.environ["PIT_AUTHOR_NAME"],
+            os.environ["PIT_AUTHOR_EMAIL"],
             timestamp=datetime.now(),
         )
         parent = ~head
