@@ -117,19 +117,13 @@ class FileMode:
 
     def __iter__(self):
         # TODO: avoid string coercion
-        return (int(i) for i in oct(self)[2:])
+        return (int(i) for i in str(self))
 
     def __index__(self):
         return os.stat(self.path).st_mode
 
-    def __str__(self) -> str:
-        match self:
-            case FileMode(1, _, _, 7, _, _):
-                return "100755"
-            case FileMode(1, _, _, 6, _, _):
-                return "100644"
-            case _:
-                raise f"Unsupported filemode for {self.path}: {oct(self)}"
+    def __str__(self):
+        return oct(self)[2:]
 
 
 @dataclass
@@ -182,7 +176,16 @@ class Entry:
 
     def __bytes__(self):
         packed_id = base64.b16decode(bytes(self.oid), casefold=True)
-        return f"{self.mode} {self.name}\0".encode("latin-1") + packed_id
+
+        match self.mode:
+            case FileMode(1, _, _, 7, _, _):
+                mode = "100755"
+            case FileMode(1, _, _, 6, _, _):
+                mode = "100644"
+            case _:
+                raise f"Unsupported filemode for {self.name}: {self.mode}"
+
+        return f"{mode} {self.name}\0".encode("latin-1") + packed_id
 
     def __str__(self):
         return bytes(self).decode("latin-1")
