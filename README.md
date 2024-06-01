@@ -21,3 +21,5 @@ pip install pipenv
   * Memoized constructor
 * Decorator pattern
 * Ignorefile?
+* Custom protocols
+* Testing framework?

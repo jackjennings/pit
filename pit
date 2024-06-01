@@ -46,8 +46,11 @@ class Maybe[T]:
     value: T
 
     def __new__[T](cls, value: T):
-        # TODO: Remove conditional
-        return super().__new__(Something if bool(value) else Nothing)
+        subclass = Nothing
+        with suppress(ZeroDivisionError):
+            1 / int(bool(value))
+            subclass = Something
+        return super().__new__(subclass)
 
 
 @dataclass
