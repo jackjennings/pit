@@ -9,6 +9,7 @@ pip install pipenv
 
 * stdlib only
 * abstractions can use constructors and magic methods only
+* class attributes are all considered private
 * only keywords that are resolved using a magic method
 
 ## Topics

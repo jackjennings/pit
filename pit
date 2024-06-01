@@ -45,9 +45,9 @@ class Workspace:
 class Maybe[T]:
     value: T
 
-    @classmethod
-    def __call__[T](self, value: T):
-        return bool(value) & Something[T](value) | Nothing()
+    def __new__[T](cls, value: T):
+        # TODO: Remove conditional
+        return super().__new__(Something if bool(value) else Nothing)
 
 
 @dataclass
@@ -64,11 +64,14 @@ class Something[T](Maybe[T]):
     def __iter__(self):
         return iter([self.value])
 
+    def __or__(self, _):
+        return self
+
 
 @dataclass
 class Nothing(Maybe[None]):
-    def __init__(self):
-        super().__init__(None)
+    def __post_init__(self):
+        self.value = None
 
     def __rshift__(self, _: Callable):
         return self
@@ -81,6 +84,9 @@ class Nothing(Maybe[None]):
 
     def __iter__(self):
         return iter([])
+
+    def __or__(self, other: Maybe):
+        return other
 
 
 @dataclass
@@ -175,16 +181,17 @@ class Entry:
         return self.name < other.name
 
     def __bytes__(self):
-        packed_id = base64.b16decode(bytes(self.oid), casefold=True)
-
         match self.mode:
             case FileMode(1, _, _, 7, _, _):
                 mode = "100755"
             case FileMode(1, _, _, 6, _, _):
                 mode = "100644"
+            case FileMode(_, 4, _, _, _, _):
+                mode = "40000"
             case _:
                 raise f"Unsupported filemode for {self.name}: {self.mode}"
 
+        packed_id = base64.b16decode(bytes(self.oid), casefold=True)
         return f"{mode} {self.name}\0".encode("latin-1") + packed_id
 
     def __str__(self):
@@ -229,10 +236,21 @@ class Author:
 
 
 @dataclass
+class Message:
+    raw: str
+
+    def __str__(self):
+        return self.raw
+
+    def __getitem__(self, index: int):
+        return str(self).split("\n")[index]
+
+
+@dataclass
 class Commit:
     tree: Tree
     author: Author
-    message: str
+    message: Message
     parent: Maybe[str]
 
     def __iter__(self):
@@ -273,12 +291,19 @@ class Head:
 
 
 @dataclass
-class InitCommand:
+class Arguments:
     args: list[str]
 
+    def __getitem__(self, index: int) -> Maybe[str]:
+        return Maybe(self.args) >> (lambda args: args[index])
+
+
+@dataclass
+class InitCommand:
+    args: Arguments
+
     def __call__(self) -> int:
-        # TODO: Remove conditional
-        root_path = Path(self.args[0] if len(self.args) else os.getcwd()).resolve()
+        root_path = Path(~(self.args[0] | Something(os.getcwd()))).resolve()
         pit_path = root_path / ".pit"
         for directory_name in ["objects", "refs"]:
             (pit_path / directory_name).mkdir(parents=True, exist_ok=True)
@@ -288,19 +313,8 @@ class InitCommand:
 
 
 @dataclass
-class Message:
-    raw: str
-
-    def __str__(self):
-        return self.raw
-
-    def __getitem__(self, index: int):
-        return str(self).split("\n")[index]
-
-
-@dataclass
 class CommitCommand:
-    args: list[str]
+    args: Arguments
 
     def __call__(self) -> int:
         root_path = Path(".")
@@ -309,7 +323,7 @@ class CommitCommand:
 
         database = Database(filesystem=Filesystem(db_path))
         head = Head(Filesystem(pit_path))
-        ignore = set(root_path / ".git", root_path / ".pit", root_path / ".ruff_cache")
+        ignore = {root_path / ".git", root_path / ".pit", root_path / ".ruff_cache"}
         tree = Tree()
 
         for path in Workspace(root_path, ignore):
@@ -343,15 +357,16 @@ class CommitCommand:
 
 
 class Pit:
-    def __init__(self, *, args) -> None:
-        self.command, *self.args = args
+    def __init__(self, *, argv) -> None:
+        self.command, *args = argv[1:]
+        self.arguments = Arguments(args)
 
     def __call__(self):
         match self.command:
             case "init":
-                command = InitCommand(self.args)
+                command = InitCommand(self.arguments)
             case "commit":
-                command = CommitCommand(self.args)
+                command = CommitCommand(self.arguments)
             case _:
                 print(f"pit: '{self.command}' is not a pit command.", file=sys.stderr)
                 sys.exit(1)
@@ -359,4 +374,4 @@ class Pit:
         sys.exit(command())
 
 
-Pit(args=sys.argv[1:])()
+Pit(argv=sys.argv)()
