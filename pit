@@ -52,6 +52,9 @@ class Maybe[T]:
             subclass = Something
         return super().__new__(subclass)
 
+    def __fspath__(self) -> str:
+        return str(~self)
+
 
 @dataclass
 class Something[T](Maybe[T]):
@@ -306,7 +309,7 @@ class InitCommand:
     args: Arguments
 
     def __call__(self) -> int:
-        root_path = Path(~(self.args[0] | Something(os.getcwd()))).resolve()
+        root_path = Path(self.args[0] | Something(Path.cwd())).resolve()
         pit_path = root_path / ".pit"
         for directory_name in ["objects", "refs"]:
             (pit_path / directory_name).mkdir(parents=True, exist_ok=True)
