@@ -1,0 +1,13 @@
+[project]
+name = "pit"
+version = "0.1.0"
+description = "git, but with only magic methods"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.5",
+    "ruff>=0.11.3",
+]

@@ -5,8 +5,7 @@
 ## Setup
 
 ```sh
-asdf install
-pip install pipenv
+uv sync
 ```
 
 ## Requirements
