@@ -1,5 +1,9 @@
 # `pit`
 
+`git` — but with only Python magic methods.
+
+## Setup
+
 ```sh
 asdf install
 pip install pipenv
